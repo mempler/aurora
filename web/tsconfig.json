@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "useDefineForClassFields": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+    },
+  },
+  "references": [
+    {
+      "path": "./tsconfig.web.json",
+    },
+    {
+      "path": "./tsconfig.lib.json",
+    },
+  ],
+}
