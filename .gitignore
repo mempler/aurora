@@ -3,10 +3,6 @@
 *.local
 *.log*
 
-# Dist
-node_modules
-dist/
-
 # IDE
 .vscode/*
 !.vscode/extensions.json
