@@ -1,4 +1,5 @@
 use axum::{routing::get, Router};
+use const_format::formatcp;
 
 #[macro_use]
 extern crate tracing;
@@ -12,7 +13,9 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new() //
         .route("/", get(root));
 
-    info!("listening on :3000");
+    info!("listening on :3000 :: {:#?}", root().await);
+    info!("Available routes:");
+    info!("  http://localhost:3000/");
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await?;
@@ -21,5 +24,5 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn root() -> &'static str {
-    "Hello, World!"
+    formatcp!("aurora-api@{}", env!("CARGO_PKG_VERSION"))
 }
