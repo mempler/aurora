@@ -3,6 +3,7 @@ use axum::Router;
 
 pub mod error;
 pub mod routes;
+pub mod token;
 
 pub fn register_routes<S>() -> Router<S>
 where

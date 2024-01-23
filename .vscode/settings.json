@@ -3,5 +3,6 @@
   "editor.codeActionsOnSave": {
     "source.fixAll": "always"
   },
-  "editor.rulers": [120]
+  "editor.rulers": [120],
+  "rust-analyzer.linkedProjects": ["./backend/services/api/Cargo.toml"]
 }
