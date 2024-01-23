@@ -216,7 +216,7 @@ mod tests {
     use tracing_test::traced_test;
 
     const VALID_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==";
-    const INVALID_HMAC_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+    const INVALID_HMAC_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjj==";
 
     #[tokio::test]
     #[traced_test]
