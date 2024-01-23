@@ -68,7 +68,7 @@ pub struct AuthenticationToken {
     /// The time this token was generated. in milliseconds since the first epoch. [FIRST_EPOCH]
     pub generation_time: i64,
 
-    /// The HMAC of the token. It is composed from the generation time and the user ID. + a secret key. [static@HMAC_SECURITY_KEY]
+    /// The HMAC of the token. It is composed from the generation time and the user ID. + a secret key. [struct@HMAC_SECURITY_KEY]
     pub hmac: Vec<u8>,
 }
 
