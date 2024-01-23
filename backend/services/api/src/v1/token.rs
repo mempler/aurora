@@ -55,7 +55,7 @@ type Result<T> = std::result::Result<T, TokenError>;
 /// ```text
 /// // <user_id>         := Base64(<string>)
 /// // <generation_time> := Base64(<u64>)
-/// // <hmac>            := Base64(HMAC(<user_id>.<generation_time>))
+/// // <hmac>            := Base64(HMAC<SHA512>(<user_id>.<generation_time>))
 ///
 /// <user_id>.<generation_time>.<hmac>
 /// ```
