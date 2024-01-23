@@ -73,9 +73,16 @@ pub struct AuthenticationToken {
 }
 
 lazy_static! {
+    /// The HMAC security key.
     static ref HMAC_SECURITY_KEY: Vec<u8> = std::env::var("HMAC_SECURITY_KEY")
         .expect("HMAC_SECURITY_KEY must be set")
         .into_bytes();
+
+    /// Amount of time in seconds before a token expires.
+    static ref TOKEN_EXPIRATION_TIME: i64 = std::env::var("TOKEN_EXPIRATION_TIME")
+        .expect("TOKEN_EXPIRATION_TIME must be set")
+        .parse()
+        .expect("TOKEN_EXPIRATION_TIME must be a valid integer");
 }
 
 /// The first epoch is basically the first time when our first token was generated.
@@ -124,8 +131,7 @@ impl AuthenticationToken {
     /// Verify the token.
     ///
     /// # Errors
-    /// - [TokenError::HmacGeneration] if the HMAC Verifier failed to generate.
-    /// - [TokenError::HmacDecoding] if the HMAC is not valid Base64.
+    /// - [TokenError::HmacGeneration] Failed to create HMAC for validation.
     /// - [TokenError::HmacVerification] if the HMAC is not valid.
     pub fn verify(&self) -> Result<()> {
         let mut hmac = Hmac::<Sha512>::new_from_slice(&HMAC_SECURITY_KEY)
@@ -146,6 +152,25 @@ impl AuthenticationToken {
         Ok(())
     }
 
+    /// Checks if the token is expired.
+    pub fn expired(&self) -> bool {
+        let current_based_on_epoch = time::OffsetDateTime::now_utc() - FIRST_EPOCH;
+        let current_time = current_based_on_epoch.whole_milliseconds() as i64;
+
+        current_time - self.generation_time > (*TOKEN_EXPIRATION_TIME * 1000)
+    }
+
+    /// Create a token from a string.
+    ///
+    /// # Errors
+    ///
+    /// - [TokenError::InvalidFormat] The token is not in the correct format.
+    /// - [TokenError::UserIdBase64Decoding] Failed to decode the user ID from Base64.
+    /// - [TokenError::UserIdUtf8Decoding] Failed to decode the user ID from UTF8 (via Base64).
+    /// - [TokenError::UserIdParsing] Failed to parse the user ID from string.
+    /// - [TokenError::GenerationTimeDecoding] Failed to decode the generation time from Base64.
+    /// - [TokenError::HmacDecoding] Failed to decode the HMAC from Base64.
+    /// - everything that [AuthenticationToken::verify] can return.
     pub fn from_token<S>(token: &S) -> Result<Self>
     where
         S: AsRef<str> + ?Sized,
@@ -208,6 +233,13 @@ impl AuthenticationToken {
         Ok(token)
     }
 
+    /// Shortcut to create a token from headers.
+    ///
+    /// # Errors
+    /// - [TokenError::MissingAuthorizationHeader] Authorization header is missing.
+    /// - [TokenError::InvalidAuthorizationHeader] Authorization header is invalid.
+    /// - [TokenError::InvalidAuthorizationHeaderFormat] Authorization header is invalid.
+    /// - everything that [AuthenticationToken::from_token] can return.
     pub fn from_headers(headers: &HeaderMap) -> Result<Self> {
         let auth_header = headers
             .get("Authorization")
@@ -242,10 +274,9 @@ mod tests {
     use axum::http::HeaderValue;
     use tracing_test::traced_test;
 
-    // on tests we use "TODO: secret key" as the HMAC security key.
-
     pub fn setup() {
         std::env::set_var("HMAC_SECURITY_KEY", "TODO: secret key");
+        std::env::set_var("TOKEN_EXPIRATION_TIME", "3600");
     }
 
     const VALID_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAN9aas=.k+eOfjZ/xAvzdAO9Tmfidj4NPtJT1FEyh9EMegZLhDGufawSO3Q+PD1EGZiGv7rpoFL9v4h/8TwLq9IWVxE9wA==";
@@ -412,5 +443,17 @@ mod tests {
 
         assert!(AuthenticationToken::from_headers(&headers)
             .is_err_and(|e| e == TokenError::MissingAuthorizationHeader));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_expired() {
+        setup();
+
+        let mut token = AuthenticationToken::new(1).unwrap();
+        assert!(!token.expired());
+
+        token.generation_time = 0;
+        assert!(token.expired());
     }
 }

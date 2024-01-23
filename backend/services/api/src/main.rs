@@ -22,6 +22,16 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     //
+    // Validate Environment Variables
+    //
+    let required_env_vars = vec!["DATABASE_URL", "HMAC_SECURITY_KEY", "TOKEN_EXPIRATION_TIME"];
+    for env_var in required_env_vars {
+        if std::env::var(env_var).is_err() {
+            panic!("{} environment variable must be set", env_var);
+        }
+    }
+
+    //
     // Database Connection
     //
     let db_connection_str = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
