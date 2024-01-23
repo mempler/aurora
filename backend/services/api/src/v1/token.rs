@@ -19,7 +19,7 @@ use super::error::{APIError, APIResult};
 /// <user_id>.<generation_time>.<hmac>
 /// ```
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthenticationToken {
     /// The user ID of the user this token belongs to.
     pub user_id: u64,
@@ -68,13 +68,13 @@ impl AuthenticationToken {
         hmac.update(
             format!(
                 "{user_id}.{generation_time}",
-                user_id = BASE64_STANDARD.encode(&self.user_id.to_string()),
+                user_id = BASE64_STANDARD.encode(self.user_id.to_string()),
                 generation_time = BASE64_STANDARD.encode(self.generation_time.to_be_bytes())
             )
             .as_bytes(),
         );
 
-        self.hmac = BASE64_STANDARD.encode(&hmac.finalize().into_bytes());
+        self.hmac = BASE64_STANDARD.encode(hmac.finalize().into_bytes());
 
         Ok(())
     }
@@ -90,7 +90,7 @@ impl AuthenticationToken {
         hmac.update(
             format!(
                 "{user_id}.{generation_time}",
-                user_id = BASE64_STANDARD.encode(&self.user_id.to_string()),
+                user_id = BASE64_STANDARD.encode(self.user_id.to_string()),
                 generation_time = BASE64_STANDARD.encode(self.generation_time.to_be_bytes())
             )
             .as_bytes(),
@@ -113,7 +113,12 @@ impl AuthenticationToken {
         Ok(())
     }
 
-    pub fn from_token(token: &str) -> APIResult<Self> {
+    pub fn from_token<S>(token: &S) -> APIResult<Self>
+    where
+        S: AsRef<str> + ?Sized,
+    {
+        let token = token.as_ref();
+
         let components = token.split('.').collect::<Vec<&str>>();
         if components.len() < 3 {
             warn!("Invalid token format: {token}.");
@@ -138,14 +143,32 @@ impl AuthenticationToken {
             APIError::InvalidToken
         })?;
 
-        // FIXME: generation time
-        // FIXME: hmac
+        //
+        // Decode Generation time.
+        //
+        let generation_time: u64 = {
+            let base64_decoded = BASE64_STANDARD
+                .decode(components[1]) //
+                .map_err(|err| {
+                    warn!("Failed to base64 decode generation time from token >> {token}: {err}.");
+                    APIError::InvalidToken
+                })?;
 
-        Ok(Self {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&base64_decoded);
+
+            u64::from_be_bytes(bytes)
+        };
+
+        let token = Self {
             user_id,
-            generation_time: 0,
-            hmac: components[2].to_string(),
-        })
+            generation_time: generation_time as i64,
+            hmac: components[2].to_string(), // hmac is quite simple, we don't need to decode it.
+        };
+
+        token.verify()?;
+
+        Ok(token)
     }
 
     pub fn from_headers(headers: &HeaderMap) -> APIResult<Self> {
@@ -173,13 +196,13 @@ impl AuthenticationToken {
     }
 }
 
-impl Into<String> for AuthenticationToken {
-    fn into(self) -> String {
+impl From<AuthenticationToken> for String {
+    fn from(token: AuthenticationToken) -> Self {
         format!(
             "{user_id}.{generation_time}.{hmac}",
-            user_id = BASE64_STANDARD.encode(&self.user_id.to_string()),
-            generation_time = BASE64_STANDARD.encode(self.generation_time.to_be_bytes()),
-            hmac = self.hmac
+            user_id = BASE64_STANDARD.encode(token.user_id.to_string()),
+            generation_time = BASE64_STANDARD.encode(token.generation_time.to_be_bytes()),
+            hmac = token.hmac
         )
     }
 }
@@ -187,18 +210,98 @@ impl Into<String> for AuthenticationToken {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
-    #[test]
-    fn test_token_generation() {
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_generation() {
         let token = AuthenticationToken::new(1).unwrap();
         assert_eq!(token.user_id, 1);
         assert_ne!(token.generation_time, 0);
         assert_ne!(token.hmac, "");
     }
 
-    #[test]
-    fn test_token_verification() {
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_verification() {
         let token = AuthenticationToken::new(1).unwrap();
         assert!(token.verify().is_ok());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_from_token() {
+        let first_token = AuthenticationToken::new(1).unwrap();
+        let first_token_string: String = first_token.clone().into();
+
+        let token = AuthenticationToken::from_token(&first_token_string).unwrap();
+
+        assert_eq!(token.user_id, 1);
+        assert_eq!(token.generation_time, first_token.generation_time);
+        assert_eq!(token.hmac, first_token.hmac);
+
+        assert!(token.verify().is_ok());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_from_invalid_token() {
+        let token = AuthenticationToken::from_token("invalid token"); // invalid token format
+        assert!(token.is_err());
+
+        let token = AuthenticationToken::from_token("invalid.token"); // Not enough components.
+        assert!(token.is_err());
+
+        let token = AuthenticationToken::from_token("invalid.token.invalid"); // Enough components but invalid format
+        assert!(token.is_err());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_from_headers() {
+        let token = AuthenticationToken::new(1).unwrap();
+        let token_string: String = token.clone().into();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", token_string).parse().unwrap(),
+        );
+
+        let token = AuthenticationToken::from_headers(&headers).unwrap();
+
+        assert_eq!(token.user_id, 1);
+        assert_eq!(token.generation_time, token.generation_time);
+        assert_eq!(token.hmac, token.hmac);
+
+        assert!(token.verify().is_ok());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_from_invalid_header() {
+        let token = AuthenticationToken::new(1).unwrap();
+        let token_string: String = token.clone().into();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("{}", token_string).parse().unwrap(),
+        );
+
+        let token = AuthenticationToken::from_headers(&headers);
+        assert!(token.is_err());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_from_missing_header() {
+        let token = AuthenticationToken::new(1).unwrap();
+        let token_string: String = token.clone().into();
+
+        let mut headers = HeaderMap::new();
+
+        let token = AuthenticationToken::from_headers(&headers);
+        assert!(token.is_err());
     }
 }
