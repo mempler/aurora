@@ -125,23 +125,26 @@ impl AuthenticationToken {
             return Err(APIError::InvalidToken);
         }
 
-        let user_id: u64 = String::from_utf8(
-            BASE64_STANDARD //
-                .decode(components[0])
+        let user_id: u64 = {
+            let base64_decoded = BASE64_STANDARD
+                .decode(components[0]) //
                 .map_err(|err| {
-                    warn!("Failed to decode user ID from token >> {token}: {err}.");
+                    warn!("Failed to base64 decode user ID from token >> {token}: {err}.");
                     APIError::InvalidToken
-                })?,
-        )
-        .map_err(|err| {
-            warn!("Failed to decode user ID from token >> {token}: {err}.");
-            APIError::InvalidToken
-        })?
-        .parse()
-        .map_err(|err| {
-            warn!("Failed to parse user ID from token >> {token}: {err}.");
-            APIError::InvalidToken
-        })?;
+                })?;
+
+            let utf8_decoded = String::from_utf8(base64_decoded).map_err(|err| {
+                warn!("Failed to decode user ID from token >> {token}: {err}.");
+                APIError::InvalidToken
+            })?;
+
+            let u64_decoded = utf8_decoded.parse().map_err(|err| {
+                warn!("Failed to parse user ID from token >> {token}: {err}.");
+                APIError::InvalidToken
+            })?;
+
+            u64_decoded
+        };
 
         //
         // Decode Generation time.
@@ -212,6 +215,9 @@ mod tests {
     use super::*;
     use tracing_test::traced_test;
 
+    const VALID_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==";
+    const INVALID_HMAC_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+
     #[tokio::test]
     #[traced_test]
     async fn test_token_generation() {
@@ -226,6 +232,12 @@ mod tests {
     async fn test_token_verification() {
         let token = AuthenticationToken::new(1).unwrap();
         assert!(token.verify().is_ok());
+
+        let token = AuthenticationToken::from_token(VALID_TOKEN).unwrap();
+        assert!(token.verify().is_ok());
+
+        let token = AuthenticationToken::from_token(INVALID_HMAC_TOKEN);
+        assert!(token.is_err());
     }
 
     #[tokio::test]
@@ -245,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_token_from_invalid_token() {
+    async fn test_token_from_invalid_token_components() {
         let token = AuthenticationToken::from_token("invalid token"); // invalid token format
         assert!(token.is_err());
 
@@ -253,6 +265,22 @@ mod tests {
         assert!(token.is_err());
 
         let token = AuthenticationToken::from_token("invalid.token.invalid"); // Enough components but invalid format
+        assert!(token.is_err());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_from_invalid_token_base64() {
+        // Valid token buth with invalid user ID Base64.
+        let token = AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy!.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==");
+        assert!(token.is_err());
+
+        // Valid token but with invalid generation time Base64.
+        let token = AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw!=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==");
+        assert!(token.is_err());
+
+        // Valid token but with invalid HMAC Base64.
+        let token = AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw!=");
         assert!(token.is_err());
     }
 
