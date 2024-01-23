@@ -32,7 +32,10 @@
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
 
             (rust-bin.stable.latest.default.override {
-              extensions = [ "rust-src" ]; # required for rust-analyzer
+              extensions = [
+                "rust-src"
+                "llvm-tools-preview"
+              ];
             })
           ];
 
