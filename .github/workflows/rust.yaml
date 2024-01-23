@@ -27,9 +27,11 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Generate coverage
+        working-directory: backend
         run: cargo llvm-cov --lcov --output-path target/lcov.info
 
       - name: Upload to codecov.io
+        working-directory: backend
         uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
