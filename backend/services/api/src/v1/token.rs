@@ -296,10 +296,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_missing_header() {
-        let token = AuthenticationToken::new(1).unwrap();
-        let token_string: String = token.clone().into();
-
-        let mut headers = HeaderMap::new();
+        let headers = HeaderMap::new();
 
         let token = AuthenticationToken::from_headers(&headers);
         assert!(token.is_err());
