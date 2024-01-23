@@ -10,6 +10,9 @@ mod v1;
 #[macro_use]
 extern crate tracing;
 
+#[macro_use]
+extern crate lazy_static;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv()?;

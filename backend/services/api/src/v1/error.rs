@@ -4,6 +4,8 @@ use axum::{
     Json,
 };
 
+use super::token::TokenError;
+
 /// Generalized error type for the API.
 ///
 /// This is used to return errors from the API.
@@ -38,10 +40,7 @@ pub enum APIError {
 
     /// The token provided was invalid. since this is PII, we don't want to leak any information on why it was invalid.
     #[error("Invalid token provided.")]
-    InvalidToken = 40003,
-
-    #[error("Failed to generate a token. This is a server-side error.")]
-    FailedToGenerateToken = 40004,
+    InvalidToken(#[from] TokenError) = 40003,
 }
 
 impl APIError {
@@ -84,8 +83,7 @@ impl IntoResponse for APIError {
             // 40000 - Authorization errors
             Self::MissingHeader { .. } => impl_err!(self, StatusCode::BAD_REQUEST),
             Self::InvalidHeader { .. } => impl_err!(self, StatusCode::BAD_REQUEST),
-            Self::InvalidToken => impl_err!(self, StatusCode::UNAUTHORIZED),
-            Self::FailedToGenerateToken => impl_err!(self, StatusCode::INTERNAL_SERVER_ERROR),
+            Self::InvalidToken(_) => impl_err!(self, StatusCode::UNAUTHORIZED),
         };
 
         (status_code, Json(obj)).into_response()

@@ -123,6 +123,7 @@ dependencies = [
  "dotenv",
  "hex-literal",
  "hmac",
+ "lazy_static",
  "serde",
  "serde_json",
  "sha2",

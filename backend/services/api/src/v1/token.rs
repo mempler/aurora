@@ -72,7 +72,11 @@ pub struct AuthenticationToken {
     pub hmac: Vec<u8>,
 }
 
-pub const HMAC_SECURITY_KEY: &[u8] = b"TODO: secret key";
+lazy_static! {
+    static ref HMAC_SECURITY_KEY: Vec<u8> = std::env::var("HMAC_SECURITY_KEY")
+        .expect("HMAC_SECURITY_KEY must be set")
+        .into_bytes();
+}
 
 /// The first epoch is basically the first time when our first token was generated.
 /// to cut down on the size of the token.
@@ -98,7 +102,7 @@ impl AuthenticationToken {
     pub fn update_secure_parts(&mut self) -> Result<()> {
         let current_based_on_epoch = time::OffsetDateTime::now_utc() - FIRST_EPOCH;
 
-        let mut hmac = Hmac::<Sha512>::new_from_slice(HMAC_SECURITY_KEY)
+        let mut hmac = Hmac::<Sha512>::new_from_slice(&HMAC_SECURITY_KEY)
             .map_err(|_| TokenError::HmacGeneration)?;
 
         self.generation_time = current_based_on_epoch.whole_milliseconds() as i64; // This will overflow in 292 million years. I think we are good.
@@ -124,7 +128,7 @@ impl AuthenticationToken {
     /// - [TokenError::HmacDecoding] if the HMAC is not valid Base64.
     /// - [TokenError::HmacVerification] if the HMAC is not valid.
     pub fn verify(&self) -> Result<()> {
-        let mut hmac = Hmac::<Sha512>::new_from_slice(HMAC_SECURITY_KEY)
+        let mut hmac = Hmac::<Sha512>::new_from_slice(&HMAC_SECURITY_KEY)
             .map_err(|_| TokenError::HmacGeneration)?;
 
         hmac.update(
@@ -238,12 +242,20 @@ mod tests {
     use axum::http::HeaderValue;
     use tracing_test::traced_test;
 
+    // on tests we use "TODO: secret key" as the HMAC security key.
+
+    pub fn setup() {
+        std::env::set_var("HMAC_SECURITY_KEY", "TODO: secret key");
+    }
+
     const VALID_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAN9aas=.k+eOfjZ/xAvzdAO9Tmfidj4NPtJT1FEyh9EMegZLhDGufawSO3Q+PD1EGZiGv7rpoFL9v4h/8TwLq9IWVxE9wA==";
     const INVALID_HMAC_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAN9aas=.k+eOfjx/xAvzdAO9Tmfidj4NPtJT1FEyh9EMegZLhDGufawSO3Q+PD1EGZiGv7rpoFL9v4h/8TwLq9IWVxE9wA==";
 
     #[tokio::test]
     #[traced_test]
     async fn test_token_generation() {
+        setup();
+
         let result = AuthenticationToken::new(1);
         match result {
             Ok(token) => {
@@ -258,6 +270,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_verification() {
+        setup();
+
         // Synthetic token.
         let result = AuthenticationToken::new(1);
         match result {
@@ -283,6 +297,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_token() {
+        setup();
+
         let first_token = AuthenticationToken::new(1).unwrap();
         let first_token_string: String = first_token.clone().into();
 
@@ -298,6 +314,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_invalid_token_components() {
+        setup();
+
         // invalid token format
         assert!(AuthenticationToken::from_token("invalid token")
             .is_err_and(|e| e == TokenError::InvalidFormat));
@@ -314,6 +332,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_invalid_token_base64() {
+        setup();
+
         // Valid token buth with invalid user ID Base64.
         assert!(AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy!.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==").is_err_and(|e| e == TokenError::UserIdBase64Decoding));
 
@@ -327,6 +347,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_headers() {
+        setup();
+
         let token = AuthenticationToken::new(1).unwrap();
         let token_string: String = token.clone().into();
 
@@ -351,6 +373,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_invalid_header() {
+        setup();
+
         let token = AuthenticationToken::new(1).unwrap();
         let token_string: String = token.clone().into();
 
@@ -382,6 +406,8 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_missing_header() {
+        setup();
+
         let headers = HeaderMap::new();
 
         assert!(AuthenticationToken::from_headers(&headers)
