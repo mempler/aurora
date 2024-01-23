@@ -7,8 +7,8 @@ use crate::v1::{
 
 #[axum::debug_handler]
 pub async fn get_login(headers: HeaderMap) -> APIResult<String> {
-    let token = AuthenticationToken::from_headers(&headers)?;
-    trace!("Token: {:?}", token);
+    //let token = AuthenticationToken::from_headers(&headers)?;
+    //trace!("Token: {:?}", token);
 
     Err(APIError::GenericError(
         StatusCode::UNAUTHORIZED,
@@ -17,7 +17,7 @@ pub async fn get_login(headers: HeaderMap) -> APIResult<String> {
 }
 
 pub async fn post_login() -> APIResult<String> {
-    let token = AuthenticationToken::new(183718260674527232)?;
+    let token = AuthenticationToken::new(183718260674527232).unwrap();
 
     // TODO: implement real login
     Ok(token.into())

@@ -4,7 +4,48 @@ use hmac::{Hmac, Mac};
 use sha2::Sha512;
 use time::{Date, Time, UtcOffset};
 
-use super::error::{APIError, APIResult};
+#[derive(thiserror::Error, Debug, Clone, PartialEq)]
+pub enum TokenError {
+    #[error("Failed to generate HMAC for token.")]
+    HmacGeneration,
+
+    #[error("Failed to decode HMAC for token.")]
+    HmacDecoding,
+
+    #[error("Failed to verify HMAC for token.")]
+    HmacVerification,
+
+    #[error("Failed to decode user ID from token.")]
+    UserIdBase64Decoding,
+
+    #[error("Failed to decode user ID from token.")]
+    UserIdUtf8Decoding,
+
+    #[error("Failed to parse user ID from token.")]
+    UserIdParsing,
+
+    #[error("Failed to decode generation time from token.")]
+    GenerationTimeDecoding,
+
+    #[error("Invalid token format.")]
+    InvalidFormat,
+
+    #[error("Invalid token.")]
+    InvalidToken,
+
+    #[error("Missing authorization header.")]
+    MissingAuthorizationHeader,
+
+    #[error("Invalid authorization header.")]
+    InvalidAuthorizationHeader,
+
+    #[error("Invalid authorization header format.")]
+    InvalidAuthorizationHeaderFormat,
+}
+
+const BASE64: base64::engine::GeneralPurpose = BASE64_STANDARD;
+
+type Result<T> = std::result::Result<T, TokenError>;
 
 /// Authentication token.
 ///
@@ -24,11 +65,11 @@ pub struct AuthenticationToken {
     /// The user ID of the user this token belongs to.
     pub user_id: u64,
 
-    /// The time this token was generated. in seconds since the first epoch. [FIRST_EPOCH]
+    /// The time this token was generated. in milliseconds since the first epoch. [FIRST_EPOCH]
     pub generation_time: i64,
 
     /// The HMAC of the token. It is composed from the generation time and the user ID. + a secret key. [HMAC_SECURITY_KEY]
-    pub hmac: String,
+    pub hmac: Vec<u8>,
 }
 
 pub const HMAC_SECURITY_KEY: &[u8] = b"TODO: secret key";
@@ -42,11 +83,11 @@ pub const FIRST_EPOCH: time::OffsetDateTime =
     };
 
 impl AuthenticationToken {
-    pub fn new(user_id: u64) -> APIResult<Self> {
+    pub fn new(user_id: u64) -> Result<Self> {
         let mut token = AuthenticationToken {
             user_id,
             generation_time: 0,
-            hmac: "".to_string(),
+            hmac: Vec::new(),
         };
         token.update_secure_parts()?;
         Ok(token)
@@ -54,66 +95,54 @@ impl AuthenticationToken {
 
     /// Update the secure parts of the token.
     ///
-    pub fn update_secure_parts(&mut self) -> APIResult<()> {
-        // Calculate the current time based on the first epoch.
+    pub fn update_secure_parts(&mut self) -> Result<()> {
         let current_based_on_epoch = time::OffsetDateTime::now_utc() - FIRST_EPOCH;
 
-        let mut hmac = Hmac::<Sha512>::new_from_slice(HMAC_SECURITY_KEY).map_err(|err| {
-            warn!("Failed to generate HMAC for token: {err}.");
-            APIError::FailedToGenerateToken
-        })?;
+        let mut hmac = Hmac::<Sha512>::new_from_slice(HMAC_SECURITY_KEY)
+            .map_err(|_| TokenError::HmacGeneration)?;
 
-        self.generation_time = current_based_on_epoch.whole_seconds();
+        self.generation_time = current_based_on_epoch.whole_milliseconds() as i64; // This will overflow in 292 million years. I think we are good.
 
         hmac.update(
             format!(
                 "{user_id}.{generation_time}",
-                user_id = BASE64_STANDARD.encode(self.user_id.to_string()),
-                generation_time = BASE64_STANDARD.encode(self.generation_time.to_be_bytes())
+                user_id = self.user_id,
+                generation_time = self.generation_time
             )
             .as_bytes(),
         );
 
-        self.hmac = BASE64_STANDARD.encode(hmac.finalize().into_bytes());
+        self.hmac = hmac.finalize().into_bytes().to_vec();
 
         Ok(())
     }
 
     /// Verify the token.
     ///
-    pub fn verify(&self) -> APIResult<()> {
-        let mut hmac = Hmac::<Sha512>::new_from_slice(HMAC_SECURITY_KEY).map_err(|err| {
-            warn!("Failed to generate HMAC for token: {err}.");
-            APIError::FailedToGenerateToken
-        })?;
+    /// # Errors
+    /// - [TokenError::HmacGeneration] if the HMAC Verifier failed to generate.
+    /// - [TokenError::HmacDecoding] if the HMAC is not valid Base64.
+    /// - [TokenError::HmacVerification] if the HMAC is not valid.
+    pub fn verify(&self) -> Result<()> {
+        let mut hmac = Hmac::<Sha512>::new_from_slice(HMAC_SECURITY_KEY)
+            .map_err(|_| TokenError::HmacGeneration)?;
 
         hmac.update(
             format!(
                 "{user_id}.{generation_time}",
-                user_id = BASE64_STANDARD.encode(self.user_id.to_string()),
-                generation_time = BASE64_STANDARD.encode(self.generation_time.to_be_bytes())
+                user_id = self.user_id,
+                generation_time = self.generation_time
             )
             .as_bytes(),
         );
 
-        hmac.verify_slice(
-            BASE64_STANDARD
-                .decode(&self.hmac)
-                .map_err(|err| {
-                    warn!("Failed to decode HMAC for token: {err}.");
-                    APIError::InvalidToken
-                })?
-                .as_slice(),
-        )
-        .map_err(|err| {
-            warn!("Failed to verify HMAC for token: {err}.");
-            APIError::InvalidToken
-        })?;
+        hmac.verify_slice(&self.hmac)
+            .map_err(|_| TokenError::HmacVerification)?;
 
         Ok(())
     }
 
-    pub fn from_token<S>(token: &S) -> APIResult<Self>
+    pub fn from_token<S>(token: &S) -> Result<Self>
     where
         S: AsRef<str> + ?Sized,
     {
@@ -121,27 +150,20 @@ impl AuthenticationToken {
 
         let components = token.split('.').collect::<Vec<&str>>();
         if components.len() < 3 {
-            warn!("Invalid token format: {token}.");
-            return Err(APIError::InvalidToken);
+            return Err(TokenError::InvalidFormat);
         }
 
         let user_id: u64 = {
-            let base64_decoded = BASE64_STANDARD
+            let base64_decoded = BASE64
                 .decode(components[0]) //
-                .map_err(|err| {
-                    warn!("Failed to base64 decode user ID from token >> {token}: {err}.");
-                    APIError::InvalidToken
-                })?;
+                .map_err(|_| TokenError::UserIdBase64Decoding)?;
 
-            let utf8_decoded = String::from_utf8(base64_decoded).map_err(|err| {
-                warn!("Failed to decode user ID from token >> {token}: {err}.");
-                APIError::InvalidToken
-            })?;
+            let utf8_decoded =
+                String::from_utf8(base64_decoded).map_err(|_| TokenError::UserIdUtf8Decoding)?;
 
-            let u64_decoded = utf8_decoded.parse().map_err(|err| {
-                warn!("Failed to parse user ID from token >> {token}: {err}.");
-                APIError::InvalidToken
-            })?;
+            let u64_decoded = utf8_decoded
+                .parse()
+                .map_err(|_| TokenError::UserIdParsing)?;
 
             u64_decoded
         };
@@ -149,24 +171,32 @@ impl AuthenticationToken {
         //
         // Decode Generation time.
         //
-        let generation_time: u64 = {
-            let base64_decoded = BASE64_STANDARD
+        let generation_time: i64 = {
+            let base64_decoded = BASE64
                 .decode(components[1]) //
-                .map_err(|err| {
-                    warn!("Failed to base64 decode generation time from token >> {token}: {err}.");
-                    APIError::InvalidToken
-                })?;
+                .map_err(|_| TokenError::GenerationTimeDecoding)?;
 
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&base64_decoded);
 
-            u64::from_be_bytes(bytes)
+            i64::from_be_bytes(bytes)
+        };
+
+        //
+        // Decode HMAC.
+        //
+        let hmac: Vec<u8> = {
+            let base64_decoded = BASE64
+                .decode(components[2]) //
+                .map_err(|_| TokenError::HmacDecoding)?;
+
+            base64_decoded
         };
 
         let token = Self {
             user_id,
             generation_time: generation_time as i64,
-            hmac: components[2].to_string(), // hmac is quite simple, we don't need to decode it.
+            hmac,
         };
 
         token.verify()?;
@@ -174,23 +204,15 @@ impl AuthenticationToken {
         Ok(token)
     }
 
-    pub fn from_headers(headers: &HeaderMap) -> APIResult<Self> {
+    pub fn from_headers(headers: &HeaderMap) -> Result<Self> {
         let auth_header = headers
             .get("Authorization")
-            .ok_or(APIError::MissingHeader {
-                header: "Authorization",
-            })?
+            .ok_or(TokenError::MissingAuthorizationHeader)?
             .to_str()
-            .map_err(|_| APIError::InvalidHeader {
-                header: "Authorization",
-                format: "valid UTF-8 string",
-            })?;
+            .map_err(|_| TokenError::InvalidAuthorizationHeader)?;
 
         if !auth_header.starts_with("Bearer ") {
-            return Err(APIError::InvalidHeader {
-                header: "Authorization",
-                format: "Authorization: Bearer <token>",
-            });
+            return Err(TokenError::InvalidAuthorizationHeaderFormat);
         }
 
         let token = auth_header.trim_start_matches("Bearer ");
@@ -203,9 +225,9 @@ impl From<AuthenticationToken> for String {
     fn from(token: AuthenticationToken) -> Self {
         format!(
             "{user_id}.{generation_time}.{hmac}",
-            user_id = BASE64_STANDARD.encode(token.user_id.to_string()),
-            generation_time = BASE64_STANDARD.encode(token.generation_time.to_be_bytes()),
-            hmac = token.hmac
+            user_id = BASE64.encode(token.user_id.to_string()),
+            generation_time = BASE64.encode(token.generation_time.to_be_bytes()),
+            hmac = BASE64.encode(token.hmac),
         )
     }
 }
@@ -213,31 +235,49 @@ impl From<AuthenticationToken> for String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
     use tracing_test::traced_test;
 
-    const VALID_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==";
-    const INVALID_HMAC_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjj==";
+    const VALID_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAN9aas=.k+eOfjZ/xAvzdAO9Tmfidj4NPtJT1FEyh9EMegZLhDGufawSO3Q+PD1EGZiGv7rpoFL9v4h/8TwLq9IWVxE9wA==";
+    const INVALID_HMAC_TOKEN: &str = "MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAN9aas=.k+eOfjx/xAvzdAO9Tmfidj4NPtJT1FEyh9EMegZLhDGufawSO3Q+PD1EGZiGv7rpoFL9v4h/8TwLq9IWVxE9wA==";
 
     #[tokio::test]
     #[traced_test]
     async fn test_token_generation() {
-        let token = AuthenticationToken::new(1).unwrap();
-        assert_eq!(token.user_id, 1);
-        assert_ne!(token.generation_time, 0);
-        assert_ne!(token.hmac, "");
+        let result = AuthenticationToken::new(1);
+        match result {
+            Ok(token) => {
+                assert_eq!(token.user_id, 1);
+                assert_ne!(token.generation_time, 0);
+                assert_ne!(token.hmac.len(), 0);
+            }
+            Err(err) => panic!("Failed to generate token: {}", err),
+        }
     }
 
     #[tokio::test]
     #[traced_test]
     async fn test_token_verification() {
-        let token = AuthenticationToken::new(1).unwrap();
-        assert!(token.verify().is_ok());
+        // Synthetic token.
+        let result = AuthenticationToken::new(1);
+        match result {
+            Ok(token) => assert!(token.verify().is_ok()),
+            Err(err) => panic!("Failed to generate token: {}", err),
+        }
 
-        let token = AuthenticationToken::from_token(VALID_TOKEN).unwrap();
-        assert!(token.verify().is_ok());
+        // Real world token.
+        let result = AuthenticationToken::from_token(VALID_TOKEN);
+        match result {
+            Ok(token) => assert!(token.verify().is_ok()),
+            Err(err) => panic!("Failed to read valid token: {}", err),
+        }
 
-        let token = AuthenticationToken::from_token(INVALID_HMAC_TOKEN);
-        assert!(token.is_err());
+        // Real world token with invalid HMAC.
+        let result = AuthenticationToken::from_token(INVALID_HMAC_TOKEN);
+        match result {
+            Ok(token) => panic!("Token should be invalid: {:?}", token),
+            Err(err) => assert_eq!(err, TokenError::HmacVerification),
+        }
     }
 
     #[tokio::test]
@@ -258,30 +298,30 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_invalid_token_components() {
-        let token = AuthenticationToken::from_token("invalid token"); // invalid token format
-        assert!(token.is_err());
+        // invalid token format
+        assert!(AuthenticationToken::from_token("invalid token")
+            .is_err_and(|e| e == TokenError::InvalidFormat));
 
-        let token = AuthenticationToken::from_token("invalid.token"); // Not enough components.
-        assert!(token.is_err());
+        // Not enough components.
+        assert!(AuthenticationToken::from_token("invalid.token")
+            .is_err_and(|e| e == TokenError::InvalidFormat));
 
-        let token = AuthenticationToken::from_token("invalid.token.invalid"); // Enough components but invalid format
-        assert!(token.is_err());
+        // Enough components but invalid format. UID shouldnt work.
+        assert!(AuthenticationToken::from_token("invalid.token.invalid")
+            .is_err_and(|e| e == TokenError::UserIdBase64Decoding));
     }
 
     #[tokio::test]
     #[traced_test]
     async fn test_token_from_invalid_token_base64() {
         // Valid token buth with invalid user ID Base64.
-        let token = AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy!.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==");
-        assert!(token.is_err());
+        assert!(AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy!.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==").is_err_and(|e| e == TokenError::UserIdBase64Decoding));
 
         // Valid token but with invalid generation time Base64.
-        let token = AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw!=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==");
-        assert!(token.is_err());
+        assert!(AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw!=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw==").is_err_and(|e| e == TokenError::GenerationTimeDecoding));
 
         // Valid token but with invalid HMAC Base64.
-        let token = AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw!=");
-        assert!(token.is_err());
+        assert!(AuthenticationToken::from_token("MTgzNzE4MjYwNjc0NTI3MjMy.AAAAAAAA0Fw=.ijhqOyJ7NX+oia4iDUt+T9uC5RpJcIRq/5Xx7ClQQ1HiP2yRSzkw0nckaacw3dzmmj5OGx8zEQu7GF6h/l5Fjw!=").is_err_and(|e| e == TokenError::HmacDecoding));
     }
 
     #[tokio::test]
@@ -296,7 +336,10 @@ mod tests {
             format!("Bearer {}", token_string).parse().unwrap(),
         );
 
-        let token = AuthenticationToken::from_headers(&headers).unwrap();
+        let token = match AuthenticationToken::from_headers(&headers) {
+            Ok(token) => token,
+            Err(err) => panic!("Failed to read token from headers: {}", err),
+        };
 
         assert_eq!(token.user_id, 1);
         assert_eq!(token.generation_time, token.generation_time);
@@ -311,14 +354,29 @@ mod tests {
         let token = AuthenticationToken::new(1).unwrap();
         let token_string: String = token.clone().into();
 
+        //
+        // Missing Bearer.
+        //
         let mut headers = HeaderMap::new();
         headers.insert(
             "Authorization",
             format!("{}", token_string).parse().unwrap(),
         );
 
-        let token = AuthenticationToken::from_headers(&headers);
-        assert!(token.is_err());
+        assert!(AuthenticationToken::from_headers(&headers)
+            .is_err_and(|e| e == TokenError::InvalidAuthorizationHeaderFormat));
+
+        //
+        // Invalid UTF8.
+        //
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_bytes(b"Bearer \xc3\x28").unwrap(),
+        );
+
+        assert!(AuthenticationToken::from_headers(&headers)
+            .is_err_and(|e| e == TokenError::InvalidAuthorizationHeader));
     }
 
     #[tokio::test]
@@ -326,7 +384,7 @@ mod tests {
     async fn test_token_from_missing_header() {
         let headers = HeaderMap::new();
 
-        let token = AuthenticationToken::from_headers(&headers);
-        assert!(token.is_err());
+        assert!(AuthenticationToken::from_headers(&headers)
+            .is_err_and(|e| e == TokenError::MissingAuthorizationHeader));
     }
 }
