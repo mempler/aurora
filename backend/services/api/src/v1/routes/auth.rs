@@ -11,12 +11,15 @@ use crate::v1::{
 #[axum::debug_handler]
 pub async fn get_login(headers: HeaderMap) -> APIResult<String> {
     let token = AuthenticationToken::from_headers(&headers)?;
-    trace!("Token: {:?}", token);
+    if token.expired() {
+        return Err(APIError::ExpiredToken);
+    }
 
-    Err(APIError::GenericError(
-        StatusCode::UNAUTHORIZED,
-        "Not logged in".to_string(),
-    ))
+    // TODO: store it in some kind of database to check for revocation
+
+    // otherwise, we can now refresh the token
+    let new_token = token.refresh();
+    Ok(new_token.into())
 }
 
 /// POST /api/v1/auth/login - used to authenticate a user through Username/Password

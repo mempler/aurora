@@ -55,7 +55,7 @@ type Result<T> = std::result::Result<T, TokenError>;
 /// ```text
 /// // <user_id>         := Base64(<string>)
 /// // <generation_time> := Base64(<u64>)
-/// // <hmac>            := Base64(<string>)
+/// // <hmac>            := Base64(HMAC(<user_id>.<generation_time>))
 ///
 /// <user_id>.<generation_time>.<hmac>
 /// ```
@@ -68,7 +68,7 @@ pub struct AuthenticationToken {
     /// The time this token was generated. in milliseconds since the first epoch. [FIRST_EPOCH]
     pub generation_time: i64,
 
-    /// The HMAC of the token. It is composed from the generation time and the user ID. + a secret key. [HMAC_SECURITY_KEY]
+    /// The HMAC of the token. It is composed from the generation time and the user ID. + a secret key. [static@HMAC_SECURITY_KEY]
     pub hmac: Vec<u8>,
 }
 
@@ -102,6 +102,12 @@ impl AuthenticationToken {
         };
         token.update_secure_parts()?;
         Ok(token)
+    }
+
+    pub fn refresh(&self) -> Self {
+        let mut token = self.clone();
+        token.update_secure_parts().unwrap();
+        token
     }
 
     /// Update the secure parts of the token.
@@ -296,6 +302,25 @@ mod tests {
             }
             Err(err) => panic!("Failed to generate token: {}", err),
         }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_token_refresh() {
+        setup();
+
+        let mut token = AuthenticationToken::new(1).unwrap();
+        let old_generation_time = token.generation_time;
+        let old_hmac = token.hmac.clone();
+
+        // Artificially slow down the generation time... rust is too fast lol.
+        std::thread::sleep(std::time::Duration::from_millis(16));
+
+        token.update_secure_parts().unwrap();
+
+        assert_eq!(token.user_id, 1);
+        assert_ne!(token.generation_time, old_generation_time);
+        assert_ne!(token.hmac, old_hmac);
     }
 
     #[tokio::test]

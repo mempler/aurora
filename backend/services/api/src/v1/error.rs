@@ -38,9 +38,13 @@ pub enum APIError {
         format: &'static str,
     } = 40002,
 
-    /// The token provided was invalid. since this is PII, we don't want to leak any information on why it was invalid.
+    /// The token provided was invalid.
     #[error("Invalid token provided.")]
     InvalidToken(#[from] TokenError) = 40003,
+
+    /// The token provided was valid, but it was expired.
+    #[error("Expired token provided.")]
+    ExpiredToken = 40004,
 }
 
 impl APIError {
@@ -84,6 +88,7 @@ impl IntoResponse for APIError {
             Self::MissingHeader { .. } => impl_err!(self, StatusCode::BAD_REQUEST),
             Self::InvalidHeader { .. } => impl_err!(self, StatusCode::BAD_REQUEST),
             Self::InvalidToken(_) => impl_err!(self, StatusCode::UNAUTHORIZED),
+            Self::ExpiredToken => impl_err!(self, StatusCode::UNAUTHORIZED),
         };
 
         (status_code, Json(obj)).into_response()
